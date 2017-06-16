@@ -8,10 +8,15 @@ logger = require "logger-sharelatex"
 module.exports = CompileController =
 	compile: (req, res, next = (error) ->) ->
 		timer = new Metrics.Timer("compile-request")
+		bod = req.body
+		logger.info {bod}, "compile request body"
+		
 		RequestParser.parse req.body, (error, request) ->
 			return next(error) if error?
 			request.project_id = req.params.project_id
 			request.user_id = req.params.user_id if req.params.user_id?
+			request.csrf = req.body.compile.csrf
+			request.folder_id = req.body.compile.folder_id
 			ProjectPersistenceManager.markProjectAsJustAccessed request.project_id, (error) ->
 				return next(error) if error?
 				CompileManager.doCompile request, (error, outputFiles = []) ->
@@ -30,7 +35,7 @@ module.exports = CompileController =
 					else
 						status = "failure"
 						for file in outputFiles
-							if file.path?.match(/output\.pdf$/)
+							if file.path?.match(/output\.pdf$/) || file.path?.match(/output\.txt$/)
 								status = "success"
 
 					timer.done()

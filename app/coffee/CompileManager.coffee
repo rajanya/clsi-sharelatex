@@ -1,7 +1,9 @@
 ResourceWriter = require "./ResourceWriter"
 LatexRunner = require "./LatexRunner"
+PythonRunner = require "./PythonRunner"
 OutputFileFinder = require "./OutputFileFinder"
 OutputCacheManager = require "./OutputCacheManager"
+FileUploadManager = require "./FileUploadManager"
 Settings = require("settings-sharelatex")
 Path = require "path"
 logger = require "logger-sharelatex"
@@ -71,53 +73,89 @@ module.exports = CompileManager =
 				Metrics.inc("compiles")
 				Metrics.inc("compiles-with-image.#{tag}")
 				compileName = getCompileName(request.project_id, request.user_id)
-				LatexRunner.runLatex compileName, {
-					directory: compileDir
-					mainFile:  request.rootResourcePath
-					compiler:  request.compiler
-					timeout:   request.timeout
-					image:     request.imageName
-					environment: env
-				}, (error, output, stats, timings) ->
-					# request was for validation only
-					if request.check is "validate"
-						result = if error?.code then "fail" else "pass"
-						error = new Error("validation")
-						error.validate = result
-					# request was for compile, and failed on validation
-					if request.check is "error" and error?.message is 'exited'
-						error = new Error("compilation")
-						error.validate = "fail"
-					# compile was killed by user, was a validation, or a compile which failed validation
-					if error?.terminated or error?.validate
-						OutputFileFinder.findOutputFiles request.resources, compileDir, (err, outputFiles) ->
-							return callback(err) if err?
-							callback(error, outputFiles) # return output files so user can check logs
-						return
-					# compile completed normally
-					return callback(error) if error?
-					Metrics.inc("compiles-succeeded")
-					for metric_key, metric_value of stats or {}
-						Metrics.count(metric_key, metric_value)
-					for metric_key, metric_value of timings or {}
-						Metrics.timing(metric_key, metric_value)
-					loadavg = os.loadavg?()
-					Metrics.gauge("load-avg", loadavg[0]) if loadavg?
-					ts = timer.done()
-					logger.log {project_id: request.project_id, user_id: request.user_id, time_taken: ts, stats:stats, timings:timings, loadavg:loadavg}, "done compile"
-					if stats?["latex-runs"] > 0
-						Metrics.timing("run-compile-per-pass", ts / stats["latex-runs"])
-					if stats?["latex-runs"] > 0 and timings?["cpu-time"] > 0
-						Metrics.timing("run-compile-cpu-time-per-pass", timings["cpu-time"] / stats["latex-runs"])
-
-					OutputFileFinder.findOutputFiles request.resources, compileDir, (error, outputFiles) ->
+				if isLaTeXFile
+					LatexRunner.runLatex compileName, {
+						directory: compileDir
+						mainFile:  request.rootResourcePath
+						compiler:  request.compiler
+						timeout:   request.timeout
+						image:     request.imageName
+						environment: env
+					}, (error, output, stats, timings) ->
+						# request was for validation only
+						if request.check is "validate"
+							result = if error?.code then "fail" else "pass"
+							error = new Error("validation")
+							error.validate = result
+						# request was for compile, and failed on validation
+						if request.check is "error" and error?.message is 'exited'
+							error = new Error("compilation")
+							error.validate = "fail"
+						# compile was killed by user, was a validation, or a compile which failed validation
+						if error?.terminated or error?.validate
+							OutputFileFinder.findOutputFiles request.resources, compileDir, (err, outputFiles) ->
+								return callback(err) if err?
+								callback(error, outputFiles) # return output files so user can check logs
+							return
+						# compile completed normally
 						return callback(error) if error?
-						OutputCacheManager.saveOutputFiles outputFiles, compileDir,  (error, newOutputFiles) ->
-							callback null, newOutputFiles
-	
+						Metrics.inc("compiles-succeeded")
+						for metric_key, metric_value of stats or {}
+							Metrics.count(metric_key, metric_value)
+						for metric_key, metric_value of timings or {}
+							Metrics.timing(metric_key, metric_value)
+						loadavg = os.loadavg?()
+						Metrics.gauge("load-avg", loadavg[0]) if loadavg?
+						ts = timer.done()
+						logger.log {project_id: request.project_id, user_id: request.user_id, time_taken: ts, stats:stats, timings:timings, loadavg:loadavg}, "done compile"
+						if stats?["latex-runs"] > 0
+							Metrics.timing("run-compile-per-pass", ts / stats["latex-runs"])
+						if stats?["latex-runs"] > 0 and timings?["cpu-time"] > 0
+							Metrics.timing("run-compile-cpu-time-per-pass", timings["cpu-time"] / stats["latex-runs"])
+
+						OutputFileFinder.findOutputFiles request.resources, compileDir, (error, outputFiles) ->
+							return callback(error) if error?
+							OutputCacheManager.saveOutputFiles outputFiles, compileDir,  (error, newOutputFiles) ->
+								callback null, newOutputFiles
+				else
+					PythonRunner.runPython compileName, {
+						directory: compileDir
+						mainFile:  request.rootResourcePath
+						compiler:  request.compiler
+						timeout:   request.timeout
+						image:     request.imageName
+						environment: env
+					}, (error, output, stats, timings) ->
+						# request was for validation only
+						if request.check is "validate"
+							result = if error?.code then "fail" else "pass"
+							error = new Error("validation")
+							error.validate = result
+						# request was for compile, and failed on validation
+						if request.check is "error" and error?.message is 'exited'
+							error = new Error("compilation")
+							error.validate = "fail"
+						# compile was killed by user, was a validation, or a compile which failed validation
+						if error?.terminated or error?.validate
+							OutputFileFinder.findOutputFiles request.resources, compileDir, (err, outputFiles) ->
+								return callback(err) if err?
+								callback(error, outputFiles) # return output files so user can check logs
+							return
+						# compile completed normally
+						return callback(error) if error?
+						OutputFileFinder.findOutputFiles request.resources, compileDir, (error, outputFiles) ->
+							return callback(error) if error?
+							OutputCacheManager.saveOutputFiles outputFiles, compileDir,  (error, newOutputFiles) ->
+								options = {}
+								options.originalname = "done.jpg"
+								options.path = Path.join(compileDir, "done.jpg")
+								FileUploadManager.sendRequest request.project_id, request.user_id, request.folder_id, options, (error, status) ->
+									logger.info status, "file upload manager called"
+									callback null, newOutputFiles
+
 	stopCompile: (project_id, user_id, callback = (error) ->) ->
 		compileName = getCompileName(project_id, user_id)
-		LatexRunner.killLatex compileName, callback
+		LatexRunner.killLatex compileName, callback				
 
 	clearProject: (project_id, user_id, _callback = (error) ->) ->
 		callback = (error) ->

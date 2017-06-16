@@ -41,6 +41,8 @@ module.exports =
 	apis:
 		clsi:
 			url: "http://localhost:3013"
+		web:
+			url: "http://localhost:3000"
 			
 	smokeTest: false
 	project_cache_length_ms: 1000 * 60 * 60 * 24
